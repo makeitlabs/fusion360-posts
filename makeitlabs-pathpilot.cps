@@ -3,6 +3,8 @@
   All rights reserved.
 
   LinuxCNC (EMC2) post processor configuration.
+  modified to improve behavior on Tormach PathPilot for MakeIt Labs
+  steve.richardson@makeitlabs.com
 
   $Revision: 40469 $
   $Date: 2015-12-15 11:50:07 +0100 (ti, 15 dec 2015) $
@@ -10,10 +12,10 @@
   FORKID {52A5C3D6-1533-413E-B493-7B93D9E48B30}
 */
 
-description = "Generic LinuxCNC (EMC2)";
-vendor = "LinuxCNC.org";
-vendorUrl = "http://www.linuxcnc.org";
-legal = "Copyright (C) 2012-2015 by Autodesk, Inc.";
+description = "Tormach PathPilot MakeItLabs.2016MAY05";
+vendor = "MakeIt Labs";
+vendorUrl = "http://www.makeitlabs.com/";
+legal = "Copyright (C) 2012-2015 by Autodesk, Inc., modified by steve.richardson@makeitlabs.com";
 certificationLevel = 2;
 minimumRevision = 24000;
 
@@ -35,17 +37,18 @@ allowedCircularPlanes = undefined; // allow any circular motion
 
 // user-defined properties
 properties = {
-  writeMachine: true, // write machine
-  writeTools: true, // writes the tools
+  writeMachine: true, // writes machine notes in a comment block at the top of the file
+  writeTools: true, // writes the tools list in a comment block at the top of the file
   preloadTool: true, // preloads next tool on tool change if any
   showSequenceNumbers: true, // show sequence numbers
   sequenceNumberStart: 10, // first sequence number
   sequenceNumberIncrement: 5, // increment for sequence numbers
-  optionalStop: true, // optional stop
+  optionalStop: false, // disable optional stop before tool change / between sections
+  stopCoolantBeforeRetract: true, // turn off coolant before retracting to home position on a tool change
   separateWordsWithSpace: true, // specifies that the words should be separated with a white space
   useRadius: false, // specifies that arcs should be output using the radius (R word) instead of the I, J, and K words
   useParametricFeed: false, // specifies that feed should be output using Q values
-  showNotes: false, // specifies that operation notes should be output
+  showNotes: true, // specifies that operation notes should be output
   useG28: false // turn on to use G28 instead of G53 for machine retracts
 };
 
@@ -157,6 +160,10 @@ function writeComment(text) {
 
 function onOpen() {
 
+  machineConfiguration.setVendor("Tormach");
+  machineConfiguration.setModel("PCNC440 PCNC770 PCNC1100");
+  machineConfiguration.setDescription("Tormach PathPilot mill controller");
+
   if (false) { // note: setup your machine here
     var aAxis = createAxis({coordinate:0, table:false, axis:[1, 0, 0], range:[-360,360], preference:1});
     var cAxis = createAxis({coordinate:2, table:false, axis:[0, 0, 1], range:[-360,360], preference:1});
@@ -210,6 +217,7 @@ function onOpen() {
 
   // dump tool information
   if (properties.writeTools) {
+    writeComment(localize("Tools"));
     var zRanges = {};
     if (is3D()) {
       var numberOfSections = getNumberOfSections();
@@ -560,6 +568,10 @@ function onSection() {
     // stop spindle before retract during tool change
     if (insertToolCall && !isFirstSection()) {
       onCommand(COMMAND_STOP_SPINDLE);
+	  // if configured, stop the coolant before the retract so it doesn't spray everywhere as head returns to full height for manual change
+	  if (properties.stopCoolantBeforeRetract) {
+		onCommand(COMMAND_COOLANT_OFF);
+	  }
     }
     
     // retract to safe plane
@@ -599,14 +611,20 @@ function onSection() {
     forceWorkPlane();
     
     retracted = true;
-    onCommand(COMMAND_COOLANT_OFF);
+	  
+	// stop coolant after retract if configured that way
+	if (!properties.stopCoolantBeforeRetract) {
+	  onCommand(COMMAND_COOLANT_OFF);
+	}
+	
   
     if (!isFirstSection() && properties.optionalStop) {
       onCommand(COMMAND_OPTIONAL_STOP);
     }
 
-    if (tool.number > 99) {
-      warning(localize("Tool number exceeds maximum value."));
+	// check for tool number above max of 255
+    if (tool.number > 255) {
+      warning(localize("Tool number exceeds maximum value of 255."));
     }
 
     writeBlock("T" + toolFormat.format(tool.number), mFormat.format(6));
